@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { Sparkles, ChevronDown, Check, ArrowRight, RotateCcw, Zap, ShoppingBag } from "lucide-react";
 import PhotoUpload from "@/components/PhotoUpload";
 import StyleSelector from "@/components/StyleSelector";
@@ -9,10 +9,11 @@ import BeforeAfterSlider from "@/components/BeforeAfterSlider";
 import ProductCard from "@/components/ProductCard";
 import ConsultationModal from "@/components/ConsultationModal";
 import Toast, { type ToastMessage } from "@/components/Toast";
+import TryOnError, { type TryOnErrorDetail } from "@/components/TryOnError";
 import type { TryOnStyle } from "@/data/styles";
 import { STYLES } from "@/data/styles";
 
-type Step = "landing" | "upload" | "select" | "processing" | "result";
+type Step = "landing" | "upload" | "select" | "processing" | "result" | "error";
 
 export default function Home() {
   const [currentStep, setCurrentStep] = useState<Step>("landing");
@@ -22,6 +23,7 @@ export default function Home() {
   } | null>(null);
   const [selectedStyle, setSelectedStyle] = useState<TryOnStyle | null>(null);
   const [resultImage, setResultImage] = useState<string | null>(null);
+  const [tryOnError, setTryOnError] = useState<TryOnErrorDetail | null>(null);
   const [demoMode, setDemoMode] = useState(false);
 
   // Commerce state. Deliberately in-memory: the brief asks for a believable
@@ -52,39 +54,62 @@ export default function Home() {
     setSelectedStyle(style);
   }, []);
 
-  const handleGenerateTryOn = useCallback(async () => {
-    if (!uploadedPhoto || !selectedStyle) return;
+  const runTryOn = useCallback(
+    async (useDemoMode: boolean) => {
+      if (!uploadedPhoto || !selectedStyle) return;
 
-    setCurrentStep("processing");
+      setTryOnError(null);
+      setCurrentStep("processing");
 
-    try {
-      const base64Image = uploadedPhoto.preview;
-      const response = await fetch("/api/tryon", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image: base64Image,
-          styleId: selectedStyle.id,
-          isDemo: demoMode,
-        }),
-      });
+      try {
+        const response = await fetch("/api/tryon", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            image: uploadedPhoto.preview,
+            styleId: selectedStyle.id,
+            isDemo: useDemoMode,
+          }),
+        });
 
-      const data = await response.json();
+        const data = await response.json();
 
-      if (data.success) {
-        setResultImage(data.outputUrl);
-        setCurrentStep("result");
-      } else {
-        console.error("API Error:", data.error);
-        alert(data.error || "Failed to generate try-on. Please try again.");
-        setCurrentStep("select");
+        if (response.ok && data.success) {
+          setResultImage(data.outputUrl);
+          setCurrentStep("result");
+          return;
+        }
+
+        setTryOnError({
+          message:
+            data.error ??
+            "We couldn't create your look just now. Please try again.",
+          code: data.code,
+        });
+        setCurrentStep("error");
+      } catch (error) {
+        console.error("Try-on request failed:", error);
+        setTryOnError({
+          message:
+            "We couldn't reach our servers. Check your connection and try again.",
+          code: "NETWORK_ERROR",
+        });
+        setCurrentStep("error");
       }
-    } catch (error) {
-      console.error("Generation error:", error);
-      alert("Something went wrong. Please check your connection and try again.");
-      setCurrentStep("select");
-    }
-  }, [uploadedPhoto, selectedStyle, demoMode]);
+    },
+    [uploadedPhoto, selectedStyle]
+  );
+
+  const handleGenerateTryOn = useCallback(
+    () => runTryOn(demoMode),
+    [runTryOn, demoMode]
+  );
+
+  // Recovery path when Live Mode has no usable API key.
+  const handleUseDemoMode = useCallback(() => {
+    setDemoMode(true);
+    runTryOn(true);
+  }, [runTryOn]);
 
   // The styles grid is only mounted while the step is "select", so move the
   // step first and scroll on the next frame, once it is in the DOM.
@@ -98,6 +123,7 @@ export default function Home() {
   const handleTryAnother = useCallback(() => {
     setSelectedStyle(null);
     setResultImage(null);
+    setTryOnError(null);
     goToStyles();
   }, [goToStyles]);
 
@@ -144,6 +170,15 @@ export default function Home() {
       `${cart.length} item${cart.length === 1 ? "" : "s"} in your cart \u00b7 \u20b9${total.toLocaleString("en-IN")}`
     );
   }, [cart, showToast]);
+
+  useEffect(() => {
+    if (!["processing", "result", "error"].includes(currentStep)) return;
+    requestAnimationFrame(() => {
+      document
+        .getElementById("tryon-stage")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [currentStep]);
 
   const scrollToUpload = () => {
     document.getElementById("upload-section")?.scrollIntoView({
@@ -393,7 +428,7 @@ export default function Home() {
 
       {/* Processing */}
       {currentStep === "processing" && (
-        <section className="py-20 bg-white">
+        <section id="tryon-stage" className="py-20 bg-white">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <LoadingAnimation
               message="Creating your new look..."
@@ -404,8 +439,20 @@ export default function Home() {
       )}
 
       {/* Result */}
+      {currentStep === "error" && tryOnError && (
+        <section id="tryon-stage" className="py-20 bg-white">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <TryOnError
+              error={tryOnError}
+              onRetry={handleGenerateTryOn}
+              onUseDemoMode={handleUseDemoMode}
+            />
+          </div>
+        </section>
+      )}
+
       {currentStep === "result" && uploadedPhoto && selectedStyle && resultImage && (
-        <section className="py-20 bg-gradient-to-b from-white to-surface-muted/30">
+        <section id="tryon-stage" className="py-20 bg-gradient-to-b from-white to-surface-muted/30">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="text-center mb-12">
               <div className="inline-flex items-center gap-2 bg-green-50 text-green-700 px-4 py-2 rounded-full text-sm font-medium mb-4">
