@@ -38,7 +38,11 @@ export default function Home() {
         setUploadedPhoto({ file, preview });
         setCurrentStep("select");
       } else {
+        // Drop back out of style selection, otherwise the grid stays on screen
+        // with nothing to generate from and "Generate" silently does nothing.
         setUploadedPhoto(null);
+        setSelectedStyle(null);
+        setCurrentStep("upload");
       }
     },
     []
@@ -82,11 +86,20 @@ export default function Home() {
     }
   }, [uploadedPhoto, selectedStyle, demoMode]);
 
+  // The styles grid is only mounted while the step is "select", so move the
+  // step first and scroll on the next frame, once it is in the DOM.
+  const goToStyles = useCallback(() => {
+    setCurrentStep("select");
+    requestAnimationFrame(() => {
+      document.getElementById("styles")?.scrollIntoView({ behavior: "smooth" });
+    });
+  }, []);
+
   const handleTryAnother = useCallback(() => {
     setSelectedStyle(null);
     setResultImage(null);
-    setCurrentStep("select");
-  }, []);
+    goToStyles();
+  }, [goToStyles]);
 
   const showToast = useCallback((message: string) => {
     toastCounter.current += 1;
@@ -329,7 +342,7 @@ export default function Home() {
           {uploadedPhoto && (
             <div className="mt-8 text-center animate-fade-in-up">
               <button
-                onClick={() => setCurrentStep("select")}
+                onClick={goToStyles}
                 className="inline-flex items-center gap-2 bg-foreground text-white px-8 py-4 rounded-full font-semibold text-lg hover:bg-stone-800 transition-all shadow-lg"
               >
                 Choose Your Style
